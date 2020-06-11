@@ -184,16 +184,82 @@ public:
 	}
 };
 
+class shadow_removal
+{
+	Mat mask;
+	Mat img;
+public:
+	shadow_removal(Mat inpt_img, Mat inpt_mask){
+		mask=inpt_mask;
+		img=inpt_img;
+	}
+
+	Mat convert_to_ycrcb(){
+
+		Mat result;
+		cvtColor(img, result, CV_BGR2YCrCb);
+
+		return result;
+	}
+	double getavg(Mat ycrcb, int k){
+		int counter=0;
+		double avg=0;
+		for(int i=0; i<img.rows; i++){
+			for(int j=0; j<img.cols; j++){
+				if(k==0){
+					if(mask.at<uchar>(i,j)==255){
+						avg+=ycrcb.at<Vec3b>(i,j)[0];
+						counter++;
+					}
+				}
+				else{
+					if(mask.at<uchar>(i,j)==0){
+						avg+=ycrcb.at<Vec3b>(i,j)[0];
+						counter++;
+					}
+				}
+			}
+		}
+		avg=avg/counter;
+		return avg;
+	}
+	void add_val(int diff, Mat &intensity_correction){
+		for(int i=0; i<img.rows; i++){
+			for(int j=0; j<img.cols; j++){
+				if(mask.at<uchar>(i,j)==255){
+					intensity_correction.at<Vec3b>(i,j)[0]+=diff;
+				}
+			}
+		}
+	}
+	Mat remove(){
+		Mat ycrcb=convert_to_ycrcb();
+		double avg_shadow=getavg(ycrcb, 0);
+		double avg_light=getavg(ycrcb, 1);
+		int diff=avg_light - avg_shadow;
+		double r=avg_light/avg_shadow;
+		cout<<"diff is "<<diff<<endl;
+		Mat intensity_correction=convert_to_ycrcb();
+		add_val(diff, intensity_correction);
+		cvtColor(intensity_correction, intensity_correction, CV_YCrCb2BGR);
+		return intensity_correction;
+	}
+	
+};
+
 int main() {
 
 	Mat img = imread("shadow_2.jpg", 1);
-	Mat ycrcb, result;
+	Mat ycrcb, result, intensity_correction;
 	Mat channels[3];
 	Mat y_ch, y_ch_2;
 
 	ShadowDetection detector(img);
 	ycrcb = detector.convert_to_ycrcb();
 	result = detector.detect();
+
+	shadow_removal remover(img, result);
+	intensity_correction=remover.remove();
 
 	split(ycrcb, channels);
 	y_ch = channels[0];
@@ -205,12 +271,14 @@ int main() {
 	namedWindow("Y", WINDOW_NORMAL);
 	namedWindow("Y_2", WINDOW_NORMAL);
 	namedWindow("Result", WINDOW_NORMAL);
+	namedWindow("Intensity_correction", WINDOW_NORMAL);
 
 	imshow("Input", img);
 	imshow("YCrCb", ycrcb);
 	imshow("Y", y_ch);
 	imshow("Y_2", y_ch_2);
 	imshow("Result", result);
+	imshow("Intensity_correction", intensity_correction);
 
 	waitKey(0);
 
