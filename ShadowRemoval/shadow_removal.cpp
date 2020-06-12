@@ -227,11 +227,18 @@ public:
 		for(int i=0; i<img.rows; i++){
 			for(int j=0; j<img.cols; j++){
 				if(mask.at<uchar>(i,j)==255){
-					intensity_correction.at<Vec3b>(i,j)[0]+=diff;
+
+					if(intensity_correction.at<Vec3b>(i, j)[0] + diff < 255) {
+						intensity_correction.at<Vec3b>(i,j)[0]+=diff;	
+					}
+					else {
+						intensity_correction.at<Vec3b>(i,j)[0] = 255;
+					}
 				}
 			}
 		}
 	}
+
 	Mat remove(){
 		Mat ycrcb=convert_to_ycrcb();
 		double avg_shadow=getavg(ycrcb, 0);
@@ -242,7 +249,273 @@ public:
 		Mat intensity_correction=convert_to_ycrcb();
 		add_val(diff, intensity_correction);
 		cvtColor(intensity_correction, intensity_correction, CV_YCrCb2BGR);
-		return intensity_correction;
+
+		Mat channels[3];
+		split(ycrcb, channels);
+		Mat y_channel = channels[0];
+
+		Mat y_channel_equ;
+		equalizeHist(y_channel, y_channel_equ);
+
+		int y_max = 0, y_min = 300;
+
+		for(int i=0; i<y_channel_equ.rows; i++) {
+			for(int j=0; j<y_channel_equ.cols; j++) {
+				if(mask.at<uchar>(i, j) == 255) {
+					if(y_max < y_channel_equ.at<uchar>(i, j)) {
+						y_max = y_channel_equ.at<uchar>(i, j);
+					}
+
+					if(y_min > y_channel_equ.at<uchar>(i, j)) {
+						y_min = y_channel_equ.at<uchar>(i, j);	
+					}
+				}
+			}
+		}
+
+		cout << "Y_MAX: " << y_max << ", Y_MIN: " << y_min << endl;
+
+		Mat umbra = Mat(mask.rows, mask.cols, CV_8UC1, Scalar(0));
+		Mat penumbra = umbra.clone(), sunlight= umbra.clone();
+
+		for(int i=0; i<y_channel_equ.rows; i++) {
+			for(int j=0; j<y_channel_equ.cols; j++) {
+				if(mask.at<uchar>(i, j) == 255) {
+					if(((double) y_max - y_channel_equ.at<uchar>(i, j)) / (y_max - y_min) <= 0.25) {
+						sunlight.at<uchar>(i, j) = 255;
+					}
+					else if(((double) y_max - y_channel_equ.at<uchar>(i, j)) / (y_max - y_min) >= 0.75) {
+						umbra.at<uchar>(i, j) = 255;
+					}
+					else {
+						penumbra.at<uchar>(i, j) = 255;
+					}
+				}
+			}
+		}
+
+		double avg_non_shadow_r = 0.0, avg_non_shadow_b = 0.0, avg_non_shadow_g = 0.0;
+
+		int counter = 0;
+
+		for(int i=0; i<intensity_correction.rows; i++) {
+			for(int j=0; j<intensity_correction.cols; j++) {
+				if(mask.at<uchar>(i, j) == 0) {
+					counter++;
+					avg_non_shadow_b += intensity_correction.at<Vec3b>(i, j)[0];
+					avg_non_shadow_g += intensity_correction.at<Vec3b>(i, j)[1];
+					avg_non_shadow_r += intensity_correction.at<Vec3b>(i, j)[2];
+				}
+			}
+		}
+
+		avg_non_shadow_b /= counter;
+		avg_non_shadow_g /= counter;
+		avg_non_shadow_r /= counter;
+
+		Mat color_correction = intensity_correction.clone();
+
+		cout << "AVG_B: " << avg_non_shadow_b << ", AVG_G: " << avg_non_shadow_g << ", AVG_R: " << avg_non_shadow_r << endl;
+
+		double const_b, const_r, const_g;
+
+		double avg_b, avg_g, avg_r;
+		
+		counter = 0;
+		avg_b = 0.0;
+		avg_g = 0.0;
+		avg_r = 0.0;
+		for(int i=0; i<intensity_correction.rows; i++) {
+			for(int j=0; j<intensity_correction.cols; j++) {
+				if(penumbra.at<uchar>(i, j) == 255) {
+					counter++;
+					avg_b += intensity_correction.at<Vec3b>(i, j)[0];
+					avg_g += intensity_correction.at<Vec3b>(i, j)[1];
+					avg_r += intensity_correction.at<Vec3b>(i, j)[2];
+				}
+			}
+		}
+
+		avg_b /= counter;
+		avg_g /= counter;
+		avg_r /= counter;
+
+		const_b = avg_non_shadow_b / avg_b;
+		const_g = avg_non_shadow_g / avg_g;
+		const_r = avg_non_shadow_r / avg_r;
+
+		for(int i=0; i<intensity_correction.rows; i++) {
+			for(int j=0; j<intensity_correction.cols; j++) {
+				if(penumbra.at<uchar>(i, j) == 255) {
+
+					int b, g, r;
+
+					b = (intensity_correction.at<Vec3b>(i, j)[0] * const_b + 0.5);
+					g = (intensity_correction.at<Vec3b>(i, j)[1] * const_g + 0.5);
+					r = (intensity_correction.at<Vec3b>(i, j)[2] * const_r + 0.5);
+
+					if(b < 255)
+						color_correction.at<Vec3b>(i, j)[0] = b;
+					else
+						color_correction.at<Vec3b>(i, j)[0] = 255;
+					if(g < 255)
+						color_correction.at<Vec3b>(i, j)[1] = g;
+					else
+						color_correction.at<Vec3b>(i, j)[1] = 255;
+					if(r < 255)
+						color_correction.at<Vec3b>(i, j)[2] = r;
+					else
+						color_correction.at<Vec3b>(i, j)[2] = 255;
+				}
+			}
+		}
+
+		counter = 0;
+		avg_b = 0.0;
+		avg_g = 0.0;
+		avg_r = 0.0;
+		for(int i=0; i<intensity_correction.rows; i++) {
+			for(int j=0; j<intensity_correction.cols; j++) {
+				if(umbra.at<uchar>(i, j) == 255) {
+					counter++;
+					avg_b += intensity_correction.at<Vec3b>(i, j)[0];
+					avg_g += intensity_correction.at<Vec3b>(i, j)[1];
+					avg_r += intensity_correction.at<Vec3b>(i, j)[2];
+				}
+			}
+		}
+
+		avg_b /= counter;
+		avg_g /= counter;
+		avg_r /= counter;
+
+		const_b = avg_non_shadow_b / avg_b;
+		const_g = avg_non_shadow_g / avg_g;
+		const_r = avg_non_shadow_r / avg_r;
+
+		for(int i=0; i<intensity_correction.rows; i++) {
+			for(int j=0; j<intensity_correction.cols; j++) {
+				if(umbra.at<uchar>(i, j) == 255) {
+
+					int b, g, r;
+
+					b = (intensity_correction.at<Vec3b>(i, j)[0] * const_b + 0.5);
+					g = (intensity_correction.at<Vec3b>(i, j)[1] * const_g + 0.5);
+					r = (intensity_correction.at<Vec3b>(i, j)[2] * const_r + 0.5);
+
+					if(b < 255)
+						color_correction.at<Vec3b>(i, j)[0] = b;
+					else
+						color_correction.at<Vec3b>(i, j)[0] = 255;
+					if(g < 255)
+						color_correction.at<Vec3b>(i, j)[1] = g;
+					else
+						color_correction.at<Vec3b>(i, j)[1] = 255;
+					if(r < 255)
+						color_correction.at<Vec3b>(i, j)[2] = r;
+					else
+						color_correction.at<Vec3b>(i, j)[2] = 255;
+				}
+			}
+		}
+
+		counter = 0;
+		avg_b = 0.0;
+		avg_g = 0.0;
+		avg_r = 0.0;
+		for(int i=0; i<intensity_correction.rows; i++) {
+			for(int j=0; j<intensity_correction.cols; j++) {
+				if(sunlight.at<uchar>(i, j) == 255) {
+					counter++;
+					avg_b += intensity_correction.at<Vec3b>(i, j)[0];
+					avg_g += intensity_correction.at<Vec3b>(i, j)[1];
+					avg_r += intensity_correction.at<Vec3b>(i, j)[2];
+				}
+			}
+		}
+
+		avg_b /= counter;
+		avg_g /= counter;
+		avg_r /= counter;
+
+		const_b = avg_non_shadow_b / avg_b;
+		const_g = avg_non_shadow_g / avg_g;
+		const_r = avg_non_shadow_r / avg_r;
+
+		for(int i=0; i<intensity_correction.rows; i++) {
+			for(int j=0; j<intensity_correction.cols; j++) {
+				if(sunlight.at<uchar>(i, j) == 255) {
+
+					int b, g, r;
+
+					b = (intensity_correction.at<Vec3b>(i, j)[0] * const_b + 0.5);
+					g = (intensity_correction.at<Vec3b>(i, j)[1] * const_g + 0.5);
+					r = (intensity_correction.at<Vec3b>(i, j)[2] * const_r + 0.5);
+
+					if(b < 255)
+						color_correction.at<Vec3b>(i, j)[0] = b;
+					else
+						color_correction.at<Vec3b>(i, j)[0] = 255;
+					if(g < 255)
+						color_correction.at<Vec3b>(i, j)[1] = g;
+					else
+						color_correction.at<Vec3b>(i, j)[1] = 255;
+					if(r < 255)
+						color_correction.at<Vec3b>(i, j)[2] = r;
+					else
+						color_correction.at<Vec3b>(i, j)[2] = 255;
+				}
+			}
+		}
+
+		Mat border_mask;
+		Mat temp1, temp2;
+		Mat kernel = getStructuringElement(MORPH_RECT, Size(3, 3));
+		dilate(mask, temp1, kernel);
+		erode(mask, temp2, kernel);
+		border_mask = temp1 - temp2;
+
+		Mat border_mask_2 = border_mask.clone();
+		dilate(border_mask_2, border_mask_2, kernel);
+
+		Mat borders = Mat(color_correction.rows, color_correction.cols, CV_8UC3, Scalar(0, 0, 0));
+
+		for(int i=0; i<color_correction.rows; i++) {
+			for(int j=0; j<color_correction.cols; j++) {
+				if(border_mask_2.at<uchar>(i, j) == 255) {
+					borders.at<Vec3b>(i, j)[0] = color_correction.at<Vec3b>(i, j)[0];
+					borders.at<Vec3b>(i, j)[1] = color_correction.at<Vec3b>(i, j)[1];
+					borders.at<Vec3b>(i, j)[2] = color_correction.at<Vec3b>(i, j)[2];
+				}
+			}
+		}
+
+		Mat color_correction_smooth = color_correction.clone();
+		GaussianBlur(borders, borders, Size(3, 3), 0, 0);
+
+		for(int i=0; i<color_correction.rows; i++) {
+			for(int j=0; j<color_correction.cols; j++) {
+				if(border_mask.at<uchar>(i ,j) == 255) {
+					color_correction_smooth.at<Vec3b>(i ,j)[0] = borders.at<Vec3b>(i, j)[0];
+					color_correction_smooth.at<Vec3b>(i ,j)[1] = borders.at<Vec3b>(i, j)[1];
+					color_correction_smooth.at<Vec3b>(i ,j)[2] = borders.at<Vec3b>(i, j)[2];
+				}
+			}
+		}
+
+		namedWindow("intensity_correction", WINDOW_NORMAL);
+		namedWindow("umbra", WINDOW_NORMAL);
+		namedWindow("penumbra", WINDOW_NORMAL);
+		namedWindow("sunlight", WINDOW_NORMAL);
+		namedWindow("color_correction", WINDOW_NORMAL);
+		imshow("intensity_correction", intensity_correction);
+		imshow("umbra", umbra);
+		imshow("penumbra", penumbra);
+		imshow("sunlight", sunlight);
+		imshow("color_correction", color_correction);
+
+
+		return color_correction_smooth;
 	}
 	
 };
@@ -250,7 +523,7 @@ public:
 int main() {
 
 	Mat img = imread("shadow_2.jpg", 1);
-	Mat ycrcb, result, intensity_correction;
+	Mat ycrcb, result, color_correction_result;
 	Mat channels[3];
 	Mat y_ch, y_ch_2;
 
@@ -259,7 +532,7 @@ int main() {
 	result = detector.detect();
 
 	shadow_removal remover(img, result);
-	intensity_correction=remover.remove();
+	color_correction_result=remover.remove();
 
 	split(ycrcb, channels);
 	y_ch = channels[0];
@@ -271,14 +544,14 @@ int main() {
 	namedWindow("Y", WINDOW_NORMAL);
 	namedWindow("Y_2", WINDOW_NORMAL);
 	namedWindow("Result", WINDOW_NORMAL);
-	namedWindow("Intensity_correction", WINDOW_NORMAL);
+	namedWindow("color_correction_result", WINDOW_NORMAL);
 
 	imshow("Input", img);
 	imshow("YCrCb", ycrcb);
 	imshow("Y", y_ch);
 	imshow("Y_2", y_ch_2);
 	imshow("Result", result);
-	imshow("Intensity_correction", intensity_correction);
+	imshow("color_correction_result", color_correction_result);
 
 	waitKey(0);
 
